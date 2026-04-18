@@ -1,0 +1,73 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug netwatch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=netwatch"
+                ],
+                "filter": {
+                    "name": "netwatch",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "terminal": "integrated",
+            "stopOnEntry": false
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug netwatch (release symbols)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--release",
+                    "--bin=netwatch"
+                ],
+                "filter": {
+                    "name": "netwatch",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach to netwatch.exe",
+            "program": "${workspaceFolder}/target/debug/netwatch.exe",
+            "pid": "${command:pickProcess}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=netwatch"
+                ],
+                "filter": {
+                    "name": "netwatch",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
