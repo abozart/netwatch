@@ -14,27 +14,24 @@ Single-binary (~4 MB), no installer, no dependencies outside Windows.
 ## Requirements
 
 - **Windows 11 x64** (Windows 10 should work but isn't tested every build)
-- One-time ETW setup so you don't get a UAC prompt on every launch (see below)
+- **Admin elevation on launch** — the ETW kernel-network provider that
+  feeds the per-process bandwidth requires it; netwatch requests UAC
+  via its embedded manifest, so a consent prompt fires every time.
 
-## One-time setup: ETW access
+### (Optional) Suppress the UAC prompt
 
-Netwatch uses the `Microsoft-Windows-Kernel-Network` ETW provider for
-per-process byte counts. That provider requires either Administrator or
-membership in the local **Performance Log Users** group.
-
-The cleanest path (no UAC prompts afterward) is to add yourself to that
-group once. In an **elevated** PowerShell:
+If the per-launch prompt gets old, add yourself to the local
+**Performance Log Users** group once and switch netwatch to
+`asInvoker`. In an **elevated** PowerShell:
 
 ```powershell
 Add-LocalGroupMember -Group "Performance Log Users" -Member $env:USERNAME
 ```
 
-Then **sign out and back in** (group membership only takes effect at
-logon). Launch `netwatch.exe` normally — no UAC.
-
-If you skip this, netwatch will show a red banner explaining the same
-command. You can also right-click netwatch.exe → "Run as administrator"
-for a one-off.
+Then sign out + in. To make netwatch stop requesting elevation, change
+`build.rs`'s `ExecutionLevel::RequireAdministrator` to `AsInvoker` and
+rebuild. (We default to RequireAdministrator because it works on every
+machine without any setup.)
 
 ## Download & run
 

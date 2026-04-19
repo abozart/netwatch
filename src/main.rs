@@ -18,6 +18,8 @@ mod elevate;
 mod etw;
 #[cfg(windows)]
 mod services;
+#[cfg(windows)]
+mod tasks;
 
 use eframe::egui;
 use parking_lot::RwLock;

@@ -65,3 +65,18 @@ pub fn kill_process(pid: u32) -> Result<i32> {
     let script = format!("Stop-Process -Id {pid} -Force");
     run_elevated_powershell(&script)
 }
+
+/// Disable a scheduled task by full path (e.g. `\Mozilla\Firefox Default …`).
+/// Stops it from re-launching at its trigger times.
+pub fn disable_scheduled_task(full_path: &str) -> Result<i32> {
+    let safe = full_path.replace('\'', "''");
+    let script = format!("Disable-ScheduledTask -TaskPath (Split-Path '{p}' -Parent) -TaskName (Split-Path '{p}' -Leaf) | Out-Null", p = safe);
+    run_elevated_powershell(&script)
+}
+
+/// Re-enable a scheduled task previously disabled.
+pub fn enable_scheduled_task(full_path: &str) -> Result<i32> {
+    let safe = full_path.replace('\'', "''");
+    let script = format!("Enable-ScheduledTask -TaskPath (Split-Path '{p}' -Parent) -TaskName (Split-Path '{p}' -Leaf) | Out-Null", p = safe);
+    run_elevated_powershell(&script)
+}

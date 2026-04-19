@@ -20,6 +20,10 @@ pub struct OpenMenu {
     pub exe: Option<PathBuf>,
     pub services: Vec<String>,
     pub is_blocked: bool,
+    /// Scheduled tasks whose first action targets this exe. Populated
+    /// synchronously at right-click time (PowerShell shell-out, ~500 ms).
+    #[cfg(windows)]
+    pub tasks: Vec<crate::tasks::TaskInfo>,
 }
 
 pub struct NetWatchApp {
@@ -71,8 +75,13 @@ impl NetWatchApp {
                     if let Err(e) = reg.bind(*feat, &combo) {
                         state.write().set_status(
                             false,
-                            format!("Hotkey bind failed ({}): {e}", feat.label()),
+                            format!(
+                                "Hotkey {combo} for {} unavailable — another app likely owns it. \
+                                 Open Options and pick a different combo.",
+                                feat.label()
+                            ),
                         );
+                        let _ = e; // detail in stderr via set_status mirror
                     }
                 }
             }
@@ -291,7 +300,10 @@ impl NetWatchApp {
             });
         });
 
-        #[cfg(windows)]
+        // Verbose ETW counters are noisy for end users — only show in debug
+        // builds (or when something looks wrong below). The etw_error path
+        // still surfaces real failures.
+        #[cfg(all(windows, debug_assertions))]
         {
             use std::sync::atomic::Ordering;
             let seen = crate::etw::ETW_EVENTS_SEEN.load(Ordering::Relaxed);
@@ -526,6 +538,11 @@ impl NetWatchApp {
                                 let pos = resp
                                     .interact_pointer_pos()
                                     .unwrap_or_else(|| resp.rect.left_bottom());
+                                #[cfg(windows)]
+                                let tasks = exe_path
+                                    .as_ref()
+                                    .and_then(|p| crate::tasks::find_tasks_for(p).ok())
+                                    .unwrap_or_default();
                                 self.open_menu = Some(OpenMenu {
                                     pid: *pid,
                                     name: name.clone(),
@@ -533,6 +550,8 @@ impl NetWatchApp {
                                     exe: exe_path.clone(),
                                     services: svcs.clone(),
                                     is_blocked,
+                                    #[cfg(windows)]
+                                    tasks,
                                 });
                             }
                         });
@@ -657,6 +676,39 @@ fn menu_actions(
                 let msg = format!("Re-enabled {svc}");
                 dispatch(state.clone(), &msg, move || {
                     actions::enable_service(&n).map(|_| ())
+                });
+                *close = true;
+            }
+        }
+    }
+
+    if !menu.tasks.is_empty() {
+        ui.separator();
+        for task in &menu.tasks {
+            let path = task.full_path.clone();
+            // Show the leaf name (full path is in the hover tooltip).
+            let leaf = path.rsplit('\\').next().unwrap_or(path.as_str());
+            if ui
+                .button(format!("Disable scheduled task: {leaf}"))
+                .on_hover_text(&path)
+                .clicked()
+            {
+                let p = path.clone();
+                let msg = format!("Disabled task {leaf}");
+                dispatch(state.clone(), &msg, move || {
+                    actions::disable_scheduled_task(&p).map(|_| ())
+                });
+                *close = true;
+            }
+            if ui
+                .button(format!("Re-enable scheduled task: {leaf}"))
+                .on_hover_text(&path)
+                .clicked()
+            {
+                let p = path.clone();
+                let msg = format!("Re-enabled task {leaf}");
+                dispatch(state.clone(), &msg, move || {
+                    actions::enable_scheduled_task(&p).map(|_| ())
                 });
                 *close = true;
             }
@@ -815,7 +867,10 @@ impl NetWatchApp {
                 if let Err(e) = reg.bind(feat, &combo) {
                     self.state.write().set_status(
                         false,
-                        format!("Could not bind {combo} for {}: {e}", feat.label()),
+                        format!(
+                            "{combo} is taken (probably by another app). Try a different combo for {}. ({e})",
+                            feat.label()
+                        ),
                     );
                 } else {
                     self.state

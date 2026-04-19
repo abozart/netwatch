@@ -31,6 +31,10 @@ First alpha. Everything below is functional but rough.
   bound by default so the user can escape a stuck click-through state).
 - Settings persisted to `%APPDATA%\netwatch\settings.json`: opacity,
   toggles, sort state, per-feature hotkey bindings.
+- Embedded manifest requests `RequireAdministrator` so the ETW
+  kernel-network provider is always reachable on first launch (UAC
+  prompts every run; can be swapped to `AsInvoker` + Performance Log
+  Users group for prompt-free use — see README).
 - ETW session auto-cleanup on startup via `QueryAllTracesW`: enumerates
   every active session and stops any whose name starts with
   `netwatch-etw`, preventing the "N leaked PID-named sessions compete
@@ -40,9 +44,16 @@ First alpha. Everything below is functional but rough.
   intervals, safety hotkey). Every other module reads from it.
 - Chart height grows with window height when the process table is
   hidden; stays fixed when visible.
-- ETW diagnostic banner showing `started`, `seen`, `matched`,
-  `parse_err` counters so alpha users can triage data-pipeline issues
-  without attaching a debugger.
+- ETW diagnostic banner with `started`, `seen`, `matched`, `parse_err`
+  counters — visible only in debug builds (release builds rely on the
+  `etw_error` banner for failures).
+- Right-click → **Disable scheduled task: <name>** when the row's exe
+  is referenced by one or more Windows Task Scheduler tasks (catches
+  Mozilla / Edge / vendor updaters that aren't services). Re-enable
+  available via the same menu.
+- Conditional manifest: release builds request `RequireAdministrator`,
+  debug builds (and `cargo test`) stay `AsInvoker` so the test harness
+  can launch unattended.
 - `FeatureToggle` enum as the single source of truth for every
   user-toggleable option; Options UI, tray, hotkey manager, and
   settings all iterate it.
