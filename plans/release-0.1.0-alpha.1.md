@@ -60,7 +60,7 @@ Sign out and back in for the membership to take effect.
 certutil -hashfile netwatch.exe SHA256
 ```
 
-Expected SHA-256: `<PASTE_SHA256_HERE>`
+Expected SHA-256: `65c696b36c1716d0b54e0bccab94ee77468e194250b6704bb5fe37ea4e08b425`
 
 ### Known issues
 
