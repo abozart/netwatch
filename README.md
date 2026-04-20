@@ -1,10 +1,12 @@
 # netwatch
 
 A tiny always-on-top Windows network activity watcher. Shows a live
-shrinking/expanding chart of total up/down throughput plus a per-process
-table of bytes/sec, with right-click actions to **block in firewall**,
-**disable service**, or **kill process**. Transparent, draggable, pins
-on top, minimizes to the system tray.
+shrinking/expanding chart of total up/down throughput with peak and
+running-average reference lines, plus a per-process table of bytes/sec,
+with right-click actions to **block in firewall**, **disable service**,
+or **kill process**. Transparent, draggable, pins on top, minimizes to
+the system tray; the tray icon's hover tooltip mirrors the current
+Up/Dn rate so you can glance at it without opening the window.
 
 Single-binary (~4 MB), no installer, no dependencies outside Windows.
 
@@ -51,7 +53,10 @@ reset to defaults.
 
 ## Using it
 
-- **Drag** anywhere in the title bar to move the window.
+- **Drag** anywhere in the custom title bar to move the window.
+- **Hover the chart** to see the sample's wall-clock time and speed.
+- **Resize** from the bottom-right corner. When the native title bar is
+  hidden (see Options), a custom hatched grip appears there instead.
 - **Right-click a process row** for the action menu:
   - **Block network (firewall)** — adds an outbound Windows Firewall
     Block rule for that exe. Needs UAC.
@@ -61,16 +66,31 @@ reset to defaults.
     processes.
   - **Copy PID** / **Copy exe path** — unelevated, handy for scripts.
 - **Click column headers** to sort (ascending/descending toggles).
-- **Options menu** (top-right): opacity slider, always-on-top, show
-  title bar, show processes, pause, click-through, and **minimize to
-  tray on close**. Each toggle has a **[Set]** button for binding a
-  global hotkey.
+- **Options menu** (top-right). Each toggle has a **[Set]** button for
+  binding a global hotkey.
+  - Opacity slider
+  - Always on top
+  - Show title bar (native OS chrome)
+  - Show processes (table below the chart)
+  - Pause (freeze sampling)
+  - Click-through (mouse events pass through; the custom titlebar
+    hides while this is on — `Ctrl+Alt+Shift+T` toggles it off)
+  - Minimize to tray on close (intercepts the X button)
+  - Show peak/avg lines (orange peak + purple running average)
+  - Show chart axes & grid
+  - Show background (hide the dark fill for a fully transparent overlay)
+  - Hide from taskbar (also removes from Alt-Tab via `WS_EX_TOOLWINDOW`)
 - **Title-bar buttons**:
   - **`_`** — hide to system tray (window disappears; restore from tray).
   - **`X`** — quit by default. If **minimize to tray on close** is
     enabled in Options, X hides to tray instead.
 - **System tray icon** — right-click for **Show / hide**, **Toggle
-  click-through**, **Quit**.
+  click-through**, **Quit**. The tooltip shows the live Up/Dn rate.
+- **Window geometry persists**: size and on-screen position are saved
+  on every quit path (custom X, native X, tray Quit) and restored on
+  the next launch.
+- **Single-instance**: launching `netwatch.exe` while it's already
+  running just brings the existing window to the foreground.
 
 ### The critical hotkey
 
@@ -85,9 +105,6 @@ something.
 - **No hotkey conflict detection** — if another app owns a combo,
   binding fails silently with just a status banner.
 - **Tray icon is placeholder art** (a programmatically drawn cyan ring).
-- **Startup may show an ETW diagnostic banner** (`ETW: started=true seen=0 …`) —
-  this is intentional for alpha so you can tell the data pipeline is alive.
-  Will be hidden behind a debug flag in beta.
 - **No SmartScreen signature** — first launch on a fresh machine may
   show "Windows protected your PC". Click "More info" → "Run anyway".
 - **ETW session leak** on crashes — if netwatch crashes hard,

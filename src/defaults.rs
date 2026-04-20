@@ -14,6 +14,10 @@ pub const SHOW_PROCESSES: bool = true;
 pub const CLICK_THROUGH: bool = false;
 pub const MINIMIZE_TO_TRAY_ON_CLOSE: bool = false;
 pub const PAUSE: bool = false;
+pub const SHOW_PEAK_AVG: bool = true;
+pub const SHOW_CHART_AXES: bool = true;
+pub const SHOW_BACKGROUND: bool = true;
+pub const HIDE_FROM_TASKBAR: bool = false;
 
 // --- Appearance ------------------------------------------------------------
 

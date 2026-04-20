@@ -14,7 +14,7 @@ use crate::features::FeatureToggle;
 use crate::state::AppState;
 
 pub struct Tray {
-    _icon: TrayIcon, // keep alive for lifetime of app
+    icon: TrayIcon, // keep alive for lifetime of app; also used for tooltip updates
     pub show_hide_id: MenuId,
     pub toggle_click_id: MenuId,
     pub quit_id: MenuId,
@@ -43,11 +43,18 @@ impl Tray {
             .build()?;
 
         Ok(Self {
-            _icon: tray,
+            icon: tray,
             show_hide_id,
             toggle_click_id,
             quit_id,
         })
+    }
+
+    /// Update the tray-icon hover tooltip. Called once per UI tick from
+    /// `NetWatchApp::update` with the live Up/Dn rates so the user can read
+    /// the current speed by hovering over the tray icon alone.
+    pub fn set_tooltip(&self, text: &str) {
+        let _ = self.icon.set_tooltip(Some(text));
     }
 
     /// Spawn the background thread that processes tray menu events. Lives for
@@ -69,8 +76,19 @@ impl Tray {
                 break;
             };
             if ev.id == quit_id {
-                // Save settings synchronously so opacity etc. persist before death.
-                let snap = crate::settings::Settings::capture_from(&state.read());
+                // Save settings synchronously so opacity, window geometry,
+                // etc. persist before death. Window rect lives in AppState
+                // because this runs off-thread from NetWatchApp — see
+                // NetWatchApp::update where it's refreshed each frame.
+                let (size, pos, snap) = {
+                    let s = state.read();
+                    (
+                        s.last_window_size,
+                        s.last_window_pos,
+                        crate::settings::Settings::capture_from(&s),
+                    )
+                };
+                let snap = snap.with_window_rect(size, pos);
                 snap.save();
                 #[cfg(windows)]
                 crate::etw::shutdown();

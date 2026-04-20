@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{HLine, Line, Plot, PlotPoints};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +35,9 @@ pub struct NetWatchApp {
     hwnd: Option<isize>,
     /// Mirrors our own visibility so the tray Show/Hide item is a true toggle.
     hidden: bool,
+    /// Last tooltip string pushed to the tray icon. Cached so we only issue
+    /// the Win32 NIM_MODIFY call when the visible rate has actually changed.
+    last_tray_tooltip: String,
 }
 
 impl NetWatchApp {
@@ -95,6 +98,7 @@ impl NetWatchApp {
             hotkeys,
             hwnd: None,
             hidden: false,
+            last_tray_tooltip: String::new(),
         }
     }
 }
@@ -107,7 +111,11 @@ impl eframe::App for NetWatchApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let snapshot = self.snapshot_settings();
+        let (size, pos) = {
+            let s = self.state.read();
+            (s.last_window_size, s.last_window_pos)
+        };
+        let snapshot = self.snapshot_settings().with_window_rect(size, pos);
         snapshot.save();
         #[cfg(windows)]
         crate::etw::shutdown();
@@ -123,10 +131,66 @@ impl eframe::App for NetWatchApp {
             crate::defaults::UI_REPAINT_INTERVAL_MS,
         ));
 
-        // Resolve HWND on first frame so later toggles can use it.
+        // Snapshot current window geometry into AppState every frame so both
+        // on_exit *and* the tray Quit handler (which runs on its own thread)
+        // can persist the last-known rect. Zero-size rects aren't useful.
+        let (size, pos) = ctx.input(|i| {
+            let vp = i.viewport();
+            let size = vp.inner_rect.and_then(|r| {
+                (r.width() > 0.0 && r.height() > 0.0).then(|| [r.width(), r.height()])
+            });
+            let pos = vp.outer_rect.map(|r| [r.min.x, r.min.y]);
+            (size, pos)
+        });
+        if size.is_some() || pos.is_some() {
+            let mut st = self.state.write();
+            if let Some(s) = size {
+                st.last_window_size = Some(s);
+            }
+            if let Some(p) = pos {
+                st.last_window_pos = Some(p);
+            }
+        }
+
+        // Resolve HWND on first frame so later toggles can use it. On the
+        // transition from None → Some, apply one-shot OS-level toggles that
+        // Settings::apply_to couldn't touch (it only runs write_state). The
+        // click-through flag gets its own per-frame enforcement below;
+        // toolwindow/taskbar visibility we only set once to avoid the
+        // hide+show flicker it requires.
         #[cfg(windows)]
         if self.hwnd.is_none() {
             self.hwnd = find_netwatch_hwnd();
+            if let Some(hwnd) = self.hwnd {
+                let hide_tb = FeatureToggle::HideFromTaskbar.get(&self.state.read());
+                if hide_tb {
+                    crate::click_through::set_toolwindow(hwnd, true);
+                }
+            }
+        }
+
+        // Keep the click-through WS_EX_TRANSPARENT flag in sync with state
+        // every frame. Settings::apply_to runs `write_state` only, so boot
+        // with click-through pre-enabled never flipped the Win32 flag
+        // without this — and a one-shot apply on first frame turned out to
+        // race with eframe/winit's own style writes. SetWindowLongW is a
+        // sub-microsecond no-op when the flag is already correct.
+        #[cfg(windows)]
+        if let Some(hwnd) = self.hwnd {
+            let on = FeatureToggle::ClickThrough.get(&self.state.read());
+            crate::click_through::set(hwnd, on);
+        }
+
+        // Push live Up/Dn into the tray tooltip so hovering the tray icon
+        // surfaces current rates without opening the window. Only fires the
+        // Win32 update when the rendered string actually changed.
+        if let Some(tray) = self.tray.as_ref() {
+            let [(up, _), (dn, _)] = self.up_dn_labels();
+            let tooltip = format!("netwatch\n{up}\n{dn}");
+            if tooltip != self.last_tray_tooltip {
+                tray.set_tooltip(&tooltip);
+                self.last_tray_tooltip = tooltip;
+            }
         }
 
         // Pump tray + global-hotkey events once per frame.
@@ -145,22 +209,39 @@ impl eframe::App for NetWatchApp {
 
         let opacity = self.state.read().opacity;
 
-        let bg_alpha = (opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+        let (show_procs, click_through, show_background, show_title_bar) = {
+            let s = self.state.read();
+            (
+                s.show_processes,
+                s.click_through,
+                s.show_background,
+                s.show_title_bar,
+            )
+        };
+        let bg_alpha = if show_background {
+            (opacity * 255.0).round().clamp(0.0, 255.0) as u8
+        } else {
+            0
+        };
         let frame = egui::Frame::none()
             .fill(egui::Color32::from_rgba_unmultiplied(15, 15, 20, bg_alpha))
             .inner_margin(egui::Margin::same(8.0));
-
-        let show_procs = self.state.read().show_processes;
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             ui.set_opacity(opacity);
-            self.draw_titlebar(ui, ctx);
-            ui.separator();
+            if !click_through {
+                self.draw_titlebar(ui, ctx);
+                ui.separator();
+            }
             self.draw_chart(ui);
             if show_procs {
                 ui.separator();
                 self.draw_table(ui);
             }
         });
+
+        if !show_title_bar && !click_through {
+            self.draw_resize_grip(ctx);
+        }
 
         self.draw_floating_menu(ctx);
         self.draw_hotkey_recording(ctx);
@@ -175,6 +256,30 @@ impl eframe::App for NetWatchApp {
 }
 
 impl NetWatchApp {
+    /// Shared source of the "Up X B/s" / "Dn X B/s" summary shown in both the
+    /// custom titlebar and the chart overlay. Returned as (text, color) pairs
+    /// so each call site can render them with its own layout (widgets vs
+    /// painter) without duplicating the formatting or color choices.
+    fn up_dn_labels(&self) -> [(String, egui::Color32); 2] {
+        let (up, dn) = {
+            let s = self.state.read();
+            (
+                s.history_up.last().copied().unwrap_or(0.0),
+                s.history_dn.last().copied().unwrap_or(0.0),
+            )
+        };
+        [
+            (
+                format!("Up {}", fmt_rate(up)),
+                egui::Color32::from_rgb(140, 200, 255),
+            ),
+            (
+                format!("Dn {}", fmt_rate(dn)),
+                egui::Color32::from_rgb(140, 255, 170),
+            ),
+        ]
+    }
+
     fn draw_titlebar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Reserve a drag-sensitive strip for the entire top bar *before* drawing
         // widgets on top. Later widgets (buttons, menu) capture clicks normally;
@@ -184,11 +289,12 @@ impl NetWatchApp {
             ui.cursor().min - egui::vec2(4.0, 4.0),
             egui::vec2(ui.available_width() + 8.0, bar_height + 6.0),
         );
-        // Subtle lighter fill so the strip reads as a menu bar.
+        // Solid gray fill — darker than a white-tinted strip, still lighter than
+        // the app background so it reads as a menu bar.
         ui.painter().rect_filled(
             bar_rect,
             egui::Rounding::same(2.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+            egui::Color32::from_gray(42),
         );
         let bar_drag = ui.interact(
             bar_rect,
@@ -206,14 +312,6 @@ impl NetWatchApp {
                     .color(egui::Color32::LIGHT_GRAY),
             );
 
-            let (up, dn) = {
-                let s = self.state.read();
-                (
-                    s.history_up.last().copied().unwrap_or(0.0),
-                    s.history_dn.last().copied().unwrap_or(0.0),
-                )
-            };
-
             ui.add_space(12.0);
             let fixed_cell = |ui: &mut egui::Ui, width: f32, text: egui::RichText| {
                 let h = ui.available_height();
@@ -229,18 +327,9 @@ impl NetWatchApp {
                     },
                 );
             };
-            fixed_cell(
-                ui,
-                110.0,
-                egui::RichText::new(format!("Up {}", fmt_rate(up)))
-                    .color(egui::Color32::from_rgb(140, 200, 255)),
-            );
-            fixed_cell(
-                ui,
-                110.0,
-                egui::RichText::new(format!("Dn {}", fmt_rate(dn)))
-                    .color(egui::Color32::from_rgb(140, 255, 170)),
-            );
+            for (text, color) in self.up_dn_labels() {
+                fixed_cell(ui, 110.0, egui::RichText::new(text).color(color));
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("X").on_hover_text("Close").clicked() {
@@ -349,9 +438,21 @@ impl NetWatchApp {
     }
 
     fn draw_chart(&self, ui: &mut egui::Ui) {
-        let (up, dn) = {
+        let (up, dn, peak, mean, show_peak_avg, show_chart_axes) = {
             let s = self.state.read();
-            (s.history_up.clone(), s.history_dn.clone())
+            let mean = if s.sample_count == 0 {
+                0.0
+            } else {
+                s.sum_rate / s.sample_count as f64
+            };
+            (
+                s.history_up.clone(),
+                s.history_dn.clone(),
+                s.peak_rate,
+                mean,
+                s.show_peak_avg,
+                s.show_chart_axes,
+            )
         };
 
         let up_pts: PlotPoints = (0..HISTORY_LEN)
@@ -366,6 +467,7 @@ impl NetWatchApp {
             .chain(dn.iter())
             .cloned()
             .fold(0.0_f64, f64::max)
+            .max(if show_peak_avg { peak } else { 0.0 })
             .max(1024.0);
 
         // When processes are hidden, stretch the chart to fill remaining
@@ -379,10 +481,10 @@ impl NetWatchApp {
             ui.available_height().max(crate::defaults::CHART_HEIGHT_MIN)
         };
 
-        Plot::new("net_chart")
+        let plot_resp = Plot::new("net_chart")
             .height(chart_height)
-            .show_axes([false, true])
-            .show_grid([false, true])
+            .show_axes([false, show_chart_axes])
+            .show_grid([false, show_chart_axes])
             .show_background(false)
             .allow_drag(false)
             .allow_zoom(false)
@@ -390,6 +492,9 @@ impl NetWatchApp {
             .include_y(0.0)
             .include_y(max_y * 1.1)
             .y_axis_formatter(|gm, _| fmt_rate(gm.value.max(0.0)))
+            // Suppress built-in hover label; we paint our own below in the
+            // bottom-left quadrant of the pointer.
+            .label_formatter(|_, _| String::new())
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(dn_pts)
@@ -401,7 +506,49 @@ impl NetWatchApp {
                         .color(egui::Color32::from_rgb(140, 200, 255))
                         .name("up"),
                 );
+                if show_peak_avg && peak > 0.0 {
+                    plot_ui.hline(
+                        HLine::new(peak)
+                            .color(egui::Color32::from_rgb(255, 180, 90))
+                            .name(format!("peak {}", fmt_rate(peak))),
+                    );
+                }
+                if show_peak_avg && mean > 0.0 {
+                    plot_ui.hline(
+                        HLine::new(mean)
+                            .color(egui::Color32::from_rgb(200, 160, 255))
+                            .name(format!("avg {}", fmt_rate(mean))),
+                    );
+                }
             });
+
+        if let Some(hover_pos) = plot_resp.response.hover_pos() {
+            let plot_pos = plot_resp.transform.value_from_position(hover_pos);
+            let samples_ago = ((HISTORY_LEN as f64 - 1.0) - plot_pos.x).max(0.0);
+            let seconds_ago =
+                samples_ago * (crate::defaults::UI_REPAINT_INTERVAL_MS as f64 / 1000.0);
+            let text = format!(
+                "Time = {}\nSpeed = {}",
+                local_time_hms_ago(seconds_ago),
+                fmt_rate(plot_pos.y.max(0.0))
+            );
+            let painter = ui.painter();
+            let galley = painter.layout(
+                text,
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_gray(230),
+                f32::INFINITY,
+            );
+            let size = galley.size();
+            let pad = 10.0;
+            // Bottom-left quadrant: text's top-right corner sits pad below/left
+            // of the cursor.
+            let mut pos = hover_pos + egui::vec2(-size.x - pad, pad);
+            let rect = plot_resp.response.rect;
+            pos.x = pos.x.max(rect.min.x + 2.0);
+            pos.y = pos.y.min(rect.max.y - size.y - 2.0);
+            painter.galley(pos, galley, egui::Color32::WHITE);
+        }
     }
 
     fn draw_table(&mut self, ui: &mut egui::Ui) {
@@ -791,12 +938,7 @@ impl NetWatchApp {
                     let mut st = self.state.write();
                     feat.set(&mut st, val, ctx, self.hwnd);
                 }
-                // Click-through blocks further clicks from reaching the window
-                // once active, so the menu would stay stuck open over the chart.
-                // Explicitly close the menu for this toggle only.
-                if feat == FeatureToggle::ClickThrough {
-                    ui.close_menu();
-                }
+                ui.close_menu();
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -812,6 +954,7 @@ impl NetWatchApp {
                     .clicked()
                 {
                     self.state.write().recording_hotkey = Some(feat.settings_key());
+                    ui.close_menu();
                 }
             });
         });
@@ -829,6 +972,51 @@ impl NetWatchApp {
                 feat.set(&mut st, !cur, ctx, self.hwnd);
             }
         }
+    }
+
+    /// Custom bottom-right resize grip, used only when the native OS title bar
+    /// is hidden. Dragging it hands the resize off to the OS via
+    /// `ViewportCommand::BeginResize`.
+    fn draw_resize_grip(&self, ctx: &egui::Context) {
+        let screen_rect = ctx.input(|i| i.screen_rect());
+        let grip_size = 14.0;
+        let grip_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                screen_rect.max.x - grip_size,
+                screen_rect.max.y - grip_size,
+            ),
+            egui::vec2(grip_size, grip_size),
+        );
+
+        egui::Area::new(egui::Id::new("netwatch-resize-grip"))
+            .fixed_pos(grip_rect.min)
+            .order(egui::Order::Foreground)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let resp = ui.allocate_response(grip_rect.size(), egui::Sense::drag());
+                if resp.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeSouthEast);
+                }
+                if resp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                        egui::ResizeDirection::SouthEast,
+                    ));
+                }
+                // Three short diagonal hash marks, classic Windows grip look.
+                let painter = ui.painter();
+                let color = egui::Color32::from_gray(160);
+                let stroke = egui::Stroke::new(1.0, color);
+                for i in 0..3 {
+                    let off = 3.0 + i as f32 * 4.0;
+                    painter.line_segment(
+                        [
+                            egui::pos2(resp.rect.max.x - off, resp.rect.max.y - 2.0),
+                            egui::pos2(resp.rect.max.x - 2.0, resp.rect.max.y - off),
+                        ],
+                        stroke,
+                    );
+                }
+            });
     }
 
     fn hide_window(&mut self, ctx: &egui::Context) {
@@ -945,6 +1133,25 @@ fn key_to_code_name(key: egui::Key) -> Option<String> {
         _ => return None,
     };
     Some(s.to_string())
+}
+
+#[cfg(windows)]
+fn local_time_hms_ago(seconds_ago: f64) -> String {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut st) };
+    let sod = st.wHour as i64 * 3600 + st.wMinute as i64 * 60 + st.wSecond as i64;
+    let past = (sod - seconds_ago as i64).rem_euclid(86400);
+    let h = past / 3600;
+    let m = (past / 60) % 60;
+    let s = past % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(not(windows))]
+fn local_time_hms_ago(seconds_ago: f64) -> String {
+    format!("{:.0}s ago", seconds_ago)
 }
 
 #[cfg(windows)]

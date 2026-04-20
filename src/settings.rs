@@ -17,11 +17,25 @@ pub struct Settings {
     pub click_through: bool,
     #[serde(default)]
     pub minimize_to_tray_on_close: bool,
+    #[serde(default = "default_true")]
+    pub show_peak_avg: bool,
+    #[serde(default = "default_true")]
+    pub show_chart_axes: bool,
+    #[serde(default = "default_true")]
+    pub show_background: bool,
+    #[serde(default)]
+    pub hide_from_taskbar: bool,
     pub sort_by: SortBy,
     pub sort_dir: SortDir,
     /// feature_key (e.g. "click_through") → combo ("Ctrl+Alt+Shift+T")
     #[serde(default)]
     pub hotkeys: HashMap<String, String>,
+    /// Inner size of the window at last exit. `None` falls back to defaults.
+    #[serde(default)]
+    pub window_size: Option<[f32; 2]>,
+    /// Outer top-left position of the window at last exit (screen coords).
+    #[serde(default)]
+    pub window_pos: Option<[f32; 2]>,
 }
 
 fn default_true() -> bool {
@@ -43,9 +57,15 @@ impl Default for Settings {
             show_processes: defaults::SHOW_PROCESSES,
             click_through: defaults::CLICK_THROUGH,
             minimize_to_tray_on_close: defaults::MINIMIZE_TO_TRAY_ON_CLOSE,
+            show_peak_avg: defaults::SHOW_PEAK_AVG,
+            show_chart_axes: defaults::SHOW_CHART_AXES,
+            show_background: defaults::SHOW_BACKGROUND,
+            hide_from_taskbar: defaults::HIDE_FROM_TASKBAR,
             sort_by: defaults::SORT_BY,
             sort_dir: defaults::SORT_DIR,
             hotkeys,
+            window_size: None,
+            window_pos: None,
         }
     }
 }
@@ -90,6 +110,10 @@ impl Settings {
                 FeatureToggle::Pause => false, // pause never persists
                 FeatureToggle::ClickThrough => self.click_through,
                 FeatureToggle::MinimizeToTrayOnClose => self.minimize_to_tray_on_close,
+                FeatureToggle::ShowPeakAvg => self.show_peak_avg,
+                FeatureToggle::ShowChartAxes => self.show_chart_axes,
+                FeatureToggle::ShowBackground => self.show_background,
+                FeatureToggle::HideFromTaskbar => self.hide_from_taskbar,
             };
             feat.write_state(state, val);
         }
@@ -113,10 +137,30 @@ impl Settings {
             show_processes: FeatureToggle::ShowProcesses.get(state),
             click_through: FeatureToggle::ClickThrough.get(state),
             minimize_to_tray_on_close: FeatureToggle::MinimizeToTrayOnClose.get(state),
+            show_peak_avg: FeatureToggle::ShowPeakAvg.get(state),
+            show_chart_axes: FeatureToggle::ShowChartAxes.get(state),
+            show_background: FeatureToggle::ShowBackground.get(state),
+            hide_from_taskbar: FeatureToggle::HideFromTaskbar.get(state),
             sort_by: state.sort_by,
             sort_dir: state.sort_dir,
             hotkeys,
+            // Populated only at exit via Settings::with_window_rect so per-frame
+            // comparisons in app.rs don't spam-save while the user drags/resizes.
+            window_size: None,
+            window_pos: None,
         }
+    }
+
+    /// Stamp window geometry into a snapshot just before saving. Called from
+    /// `on_exit` using whatever rect the app cached on its last update frame.
+    pub fn with_window_rect(
+        mut self,
+        size: Option<[f32; 2]>,
+        pos: Option<[f32; 2]>,
+    ) -> Self {
+        self.window_size = size;
+        self.window_pos = pos;
+        self
     }
 
     /// Replace the `hotkeys` map with bindings currently held by the live

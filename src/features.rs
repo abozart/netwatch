@@ -13,6 +13,10 @@ pub enum FeatureToggle {
     Pause,
     ClickThrough,
     MinimizeToTrayOnClose,
+    ShowPeakAvg,
+    ShowChartAxes,
+    ShowBackground,
+    HideFromTaskbar,
 }
 
 impl FeatureToggle {
@@ -23,6 +27,10 @@ impl FeatureToggle {
         Self::Pause,
         Self::ClickThrough,
         Self::MinimizeToTrayOnClose,
+        Self::ShowPeakAvg,
+        Self::ShowChartAxes,
+        Self::ShowBackground,
+        Self::HideFromTaskbar,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -33,6 +41,10 @@ impl FeatureToggle {
             Self::Pause => "Pause",
             Self::ClickThrough => "Click-through",
             Self::MinimizeToTrayOnClose => "Minimize to tray on close",
+            Self::ShowPeakAvg => "Show peak/avg lines",
+            Self::ShowChartAxes => "Show chart axes & grid",
+            Self::ShowBackground => "Show background",
+            Self::HideFromTaskbar => "Hide from taskbar",
         }
     }
 
@@ -45,6 +57,10 @@ impl FeatureToggle {
             Self::Pause => "pause",
             Self::ClickThrough => "click_through",
             Self::MinimizeToTrayOnClose => "minimize_to_tray_on_close",
+            Self::ShowPeakAvg => "show_peak_avg",
+            Self::ShowChartAxes => "show_chart_axes",
+            Self::ShowBackground => "show_background",
+            Self::HideFromTaskbar => "hide_from_taskbar",
         }
     }
 
@@ -66,6 +82,10 @@ impl FeatureToggle {
             Self::Pause => st.paused,
             Self::ClickThrough => st.click_through,
             Self::MinimizeToTrayOnClose => st.minimize_to_tray_on_close,
+            Self::ShowPeakAvg => st.show_peak_avg,
+            Self::ShowChartAxes => st.show_chart_axes,
+            Self::ShowBackground => st.show_background,
+            Self::HideFromTaskbar => st.hide_from_taskbar,
         }
     }
 
@@ -79,6 +99,10 @@ impl FeatureToggle {
             Self::Pause => st.paused = value,
             Self::ClickThrough => st.click_through = value,
             Self::MinimizeToTrayOnClose => st.minimize_to_tray_on_close = value,
+            Self::ShowPeakAvg => st.show_peak_avg = value,
+            Self::ShowChartAxes => st.show_chart_axes = value,
+            Self::ShowBackground => st.show_background = value,
+            Self::HideFromTaskbar => st.hide_from_taskbar = value,
         }
     }
 
@@ -101,10 +125,12 @@ impl FeatureToggle {
                 }));
             }
             Self::ShowTitleBar => {
-                // Pair decorations with resizable: chromed window gets a real
-                // resize grip; chromeless is a fixed-size floating utility.
+                // Decorations are tied to the native OS chrome, but we keep
+                // `Resizable(true)` unconditionally so the chromeless window
+                // can still be resized via the custom grip painted in
+                // NetWatchApp::draw_resize_grip.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(value));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(value));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
             }
             Self::ShowProcesses => {
                 let w = ctx.input(|i| {
@@ -120,7 +146,18 @@ impl FeatureToggle {
                 };
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
             }
-            Self::Pause | Self::MinimizeToTrayOnClose => {}
+            Self::Pause
+            | Self::MinimizeToTrayOnClose
+            | Self::ShowPeakAvg
+            | Self::ShowChartAxes
+            | Self::ShowBackground => {}
+            Self::HideFromTaskbar => {
+                #[cfg(windows)]
+                if let Some(hwnd) = hwnd {
+                    crate::click_through::set_toolwindow(hwnd, value);
+                }
+                let _ = hwnd;
+            }
             Self::ClickThrough => {
                 #[cfg(windows)]
                 if let Some(hwnd) = hwnd {

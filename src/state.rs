@@ -38,6 +38,14 @@ pub struct AppState {
     pub procs: HashMap<u32, ProcStats>,
     pub history_up: Vec<f64>,
     pub history_dn: Vec<f64>,
+    pub peak_rate: f64,
+    pub sum_rate: f64,
+    pub sample_count: u64,
+    /// Latest observed inner size of the viewport, refreshed each frame by
+    /// NetWatchApp::update. Read by both `on_exit` and the tray Quit handler
+    /// so geometry persists regardless of how the user closes the app.
+    pub last_window_size: Option<[f32; 2]>,
+    pub last_window_pos: Option<[f32; 2]>,
     pub bucket_sent: u64,
     pub bucket_recv: u64,
     pub last_tick: Instant,
@@ -56,6 +64,10 @@ pub struct AppState {
     pub show_title_bar: bool,
     pub click_through: bool,
     pub minimize_to_tray_on_close: bool,
+    pub show_peak_avg: bool,
+    pub show_chart_axes: bool,
+    pub show_background: bool,
+    pub hide_from_taskbar: bool,
     /// Feature name currently being rebound via the "Press keys…" popup.
     /// None when no recording is in progress.
     pub recording_hotkey: Option<&'static str>,
@@ -67,6 +79,11 @@ impl AppState {
             procs: HashMap::new(),
             history_up: vec![0.0; HISTORY_LEN],
             history_dn: vec![0.0; HISTORY_LEN],
+            peak_rate: 0.0,
+            sum_rate: 0.0,
+            sample_count: 0,
+            last_window_size: None,
+            last_window_pos: None,
             bucket_sent: 0,
             bucket_recv: 0,
             last_tick: Instant::now(),
@@ -85,6 +102,10 @@ impl AppState {
             show_title_bar: defaults::SHOW_TITLE_BAR,
             click_through: defaults::CLICK_THROUGH,
             minimize_to_tray_on_close: defaults::MINIMIZE_TO_TRAY_ON_CLOSE,
+            show_peak_avg: defaults::SHOW_PEAK_AVG,
+            show_chart_axes: defaults::SHOW_CHART_AXES,
+            show_background: defaults::SHOW_BACKGROUND,
+            hide_from_taskbar: defaults::HIDE_FROM_TASKBAR,
             recording_hotkey: None,
         }
     }
@@ -123,6 +144,17 @@ impl AppState {
         self.history_up.push(up);
         self.history_dn.remove(0);
         self.history_dn.push(dn);
+
+        let tick_rate = up.max(dn);
+        if tick_rate > self.peak_rate {
+            self.peak_rate = tick_rate;
+        }
+        // Average active periods only — including idle ticks squashes the
+        // mean line onto the x-axis on a chart dominated by brief spikes.
+        if tick_rate > 0.0 {
+            self.sum_rate += tick_rate;
+            self.sample_count += 1;
+        }
 
         for p in self.procs.values_mut() {
             p.last_sent = (p.bucket_sent as f64 / elapsed) as u64;

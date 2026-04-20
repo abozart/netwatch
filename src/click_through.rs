@@ -30,3 +30,38 @@ pub fn set(hwnd: isize, on: bool) {
 
 #[cfg(not(windows))]
 pub fn set(_hwnd: isize, _on: bool) {}
+
+/// Flip `WS_EX_TOOLWINDOW` on the netwatch window. Toolwindows are excluded
+/// from both the taskbar and Alt-Tab, which is what "Hide from taskbar" gives
+/// the user. Unlike the click-through flag, taskbar inclusion is only re-read
+/// by the shell during window show, so we cycle the visibility around the
+/// style change to force the taskbar to refresh.
+#[cfg(windows)]
+pub fn set_toolwindow(hwnd: isize, on: bool) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, IsWindowVisible, SetWindowLongW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOW,
+        WS_EX_TOOLWINDOW,
+    };
+
+    let hwnd = hwnd as HWND;
+    unsafe {
+        let was_visible = IsWindowVisible(hwnd) != 0;
+        if was_visible {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        let mut styles = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if on {
+            styles |= WS_EX_TOOLWINDOW;
+        } else {
+            styles &= !WS_EX_TOOLWINDOW;
+        }
+        SetWindowLongW(hwnd, GWL_EXSTYLE, styles as i32);
+        if was_visible {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_toolwindow(_hwnd: isize, _on: bool) {}
