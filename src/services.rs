@@ -3,12 +3,27 @@ use parking_lot::RwLock;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::actions::RULE_PREFIX;
 use crate::elevate::run_powershell_capture;
 use crate::state::AppState;
+
+/// Flipped by [`shutdown`] so the refresher thread spawned by
+/// [`spawn_refresher`] exits its poll loop instead of surviving past
+/// process exit. Paired with `etw::TICK_STOP` for symmetry; both signal the
+/// same event (app is going away).
+static REFRESH_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Tell the background refresher thread to stop. Best-effort: if the
+/// thread is currently mid-PowerShell-capture it'll finish that call
+/// before checking the flag. `on_exit`'s `std::process::exit` would kill
+/// it forcibly either way; this just makes graceful shutdown possible.
+pub fn shutdown() {
+    REFRESH_STOP.store(true, Ordering::Relaxed);
+}
 
 #[derive(Debug, Deserialize)]
 struct SvcRow {
@@ -77,17 +92,24 @@ fn refresh_firewall_blocks_once() -> Result<HashSet<PathBuf>> {
 
 /// Spawn a background thread that refreshes service map and firewall-blocked set.
 pub fn spawn_refresher(state: Arc<RwLock<AppState>>) {
-    std::thread::spawn(move || {
-        loop {
-            if let Ok(map) = refresh_services_once() {
-                state.write().services = map;
+    std::thread::spawn(move || loop {
+        if REFRESH_STOP.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Ok(map) = refresh_services_once() {
+            state.write().services = map;
+        }
+        if let Ok(set) = refresh_firewall_blocks_once() {
+            state.write().fw_blocked = set;
+        }
+        // Split the sleep so `shutdown()` takes effect within ~250 ms
+        // instead of after the full refresh interval (8 s default).
+        let ticks = crate::defaults::SERVICE_REFRESH_INTERVAL_SECS * 4;
+        for _ in 0..ticks {
+            if REFRESH_STOP.load(Ordering::Relaxed) {
+                return;
             }
-            if let Ok(set) = refresh_firewall_blocks_once() {
-                state.write().fw_blocked = set;
-            }
-            std::thread::sleep(Duration::from_secs(
-                crate::defaults::SERVICE_REFRESH_INTERVAL_SECS,
-            ));
+            std::thread::sleep(Duration::from_millis(250));
         }
     });
 }

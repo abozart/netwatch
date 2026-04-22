@@ -14,9 +14,18 @@ fn rule_name_for(exe: &Path) -> String {
     format!("{RULE_PREFIX}-{stem}")
 }
 
+/// Escape a string for embedding inside a PowerShell single-quoted literal.
+/// PowerShell's rule is simple: double any embedded single quotes. Used for
+/// any name/path we splice into a `-DisplayName '…'` / `-Name '…'` argument
+/// so a filename or service name containing a quote can't end the literal
+/// early and smuggle extra cmdlets onto the pipeline.
+fn ps_sq_escape(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// Add an outbound Block firewall rule for the given exe.
 pub fn block_firewall(exe: &Path) -> Result<i32> {
-    let name = rule_name_for(exe);
+    let name = ps_sq_escape(&rule_name_for(exe));
     let script = format!(
         "if (-not (Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue)) {{\
            New-NetFirewallRule -DisplayName '{name}' -Direction Outbound \
@@ -30,7 +39,7 @@ pub fn block_firewall(exe: &Path) -> Result<i32> {
 
 /// Remove our outbound Block firewall rule for the given exe (if present).
 pub fn unblock_firewall(exe: &Path) -> Result<i32> {
-    let name = rule_name_for(exe);
+    let name = ps_sq_escape(&rule_name_for(exe));
     let script = format!(
         "Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue | \
            Remove-NetFirewallRule -ErrorAction SilentlyContinue"
@@ -40,7 +49,7 @@ pub fn unblock_firewall(exe: &Path) -> Result<i32> {
 
 /// Stop the service and set startup type to Disabled.
 pub fn disable_service(name: &str) -> Result<i32> {
-    let safe = name.replace('\'', "''");
+    let safe = ps_sq_escape(name);
     let script = format!(
         "Stop-Service -Name '{n}' -Force -ErrorAction SilentlyContinue; \
          Set-Service -Name '{n}' -StartupType Disabled",
@@ -51,7 +60,7 @@ pub fn disable_service(name: &str) -> Result<i32> {
 
 /// Restore the service to Automatic startup and start it.
 pub fn enable_service(name: &str) -> Result<i32> {
-    let safe = name.replace('\'', "''");
+    let safe = ps_sq_escape(name);
     let script = format!(
         "Set-Service -Name '{n}' -StartupType Automatic; \
          Start-Service -Name '{n}' -ErrorAction SilentlyContinue",
@@ -69,14 +78,14 @@ pub fn kill_process(pid: u32) -> Result<i32> {
 /// Disable a scheduled task by full path (e.g. `\Mozilla\Firefox Default …`).
 /// Stops it from re-launching at its trigger times.
 pub fn disable_scheduled_task(full_path: &str) -> Result<i32> {
-    let safe = full_path.replace('\'', "''");
+    let safe = ps_sq_escape(full_path);
     let script = format!("Disable-ScheduledTask -TaskPath (Split-Path '{p}' -Parent) -TaskName (Split-Path '{p}' -Leaf) | Out-Null", p = safe);
     run_elevated_powershell(&script)
 }
 
 /// Re-enable a scheduled task previously disabled.
 pub fn enable_scheduled_task(full_path: &str) -> Result<i32> {
-    let safe = full_path.replace('\'', "''");
+    let safe = ps_sq_escape(full_path);
     let script = format!("Enable-ScheduledTask -TaskPath (Split-Path '{p}' -Parent) -TaskName (Split-Path '{p}' -Leaf) | Out-Null", p = safe);
     run_elevated_powershell(&script)
 }

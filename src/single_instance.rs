@@ -6,9 +6,7 @@
 
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::System::Threading::CreateMutexW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
 
 /// Returns `true` if this process got the lock and should proceed with
 /// startup. Returns `false` if another instance already holds the lock — in
@@ -36,12 +34,12 @@ pub fn acquire_or_focus_existing() -> bool {
 }
 
 fn focus_existing_window() {
-    let title: Vec<u16> = "netwatch\0".encode_utf16().collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if !hwnd.is_null() {
-        unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
-            SetForegroundWindow(hwnd);
-        }
+    let Some(hwnd_isize) = crate::win32::find_netwatch_hwnd() else {
+        return;
+    };
+    let hwnd = hwnd_isize as *mut core::ffi::c_void;
+    unsafe {
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
     }
 }

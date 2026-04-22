@@ -57,6 +57,26 @@ impl Tray {
         let _ = self.icon.set_tooltip(Some(text));
     }
 
+    /// Repaint the tray icon as a live color-coded Up/Dn meter. Cheap per-tick
+    /// call (small allocation + NIM_MODIFY); caller rate-limits by comparing
+    /// against the last rendered pair so the icon only updates on change.
+    ///
+    /// No-ops when `tray_render::render` returns `None` (Segoe UI unavailable)
+    /// so the static ring icon set at construction stays visible. Overwriting
+    /// with a blank buffer would leave an invisible tray slot, which is worse.
+    pub fn set_meter_icon(&self, up_bps: f64, dn_bps: f64) {
+        let Some(rgba) = crate::tray_render::render(up_bps, dn_bps) else {
+            return;
+        };
+        if let Ok(icon) = Icon::from_rgba(
+            rgba,
+            crate::defaults::TRAY_ICON_SIZE,
+            crate::defaults::TRAY_ICON_SIZE,
+        ) {
+            let _ = self.icon.set_icon(Some(icon));
+        }
+    }
+
     /// Spawn the background thread that processes tray menu events. Lives for
     /// the duration of the process (no graceful shutdown — `Quit` calls
     /// `std::process::exit` which terminates everything).
@@ -72,8 +92,20 @@ impl Tray {
         std::thread::spawn(move || loop {
             // Blocking recv so we don't spin. Every action below triggers a
             // repaint so the UI reflects any state mutation promptly.
-            let Ok(ev) = MenuEvent::receiver().recv() else {
-                break;
+            // An `Err` means the channel closed permanently (process
+            // teardown, or the `tray-icon` crate's internal sender was
+            // dropped). Exit the thread but leave a breadcrumb on stderr
+            // so debugging "my tray menu stopped working" isn't a total
+            // black box. In release builds stderr is still captured on
+            // Windows when launched from a console or the app is piped;
+            // in the default GUI subsystem nothing sees it, but the
+            // alternative (silently breaking) is worse.
+            let ev = match MenuEvent::receiver().recv() {
+                Ok(ev) => ev,
+                Err(e) => {
+                    eprintln!("[tray] menu event channel closed: {e}; stopping event thread");
+                    break;
+                }
             };
             if ev.id == quit_id {
                 // Save settings synchronously so opacity, window geometry,
@@ -91,7 +123,10 @@ impl Tray {
                 let snap = snap.with_window_rect(size, pos);
                 snap.save();
                 #[cfg(windows)]
-                crate::etw::shutdown();
+                {
+                    crate::etw::shutdown();
+                    crate::services::shutdown();
+                }
                 std::process::exit(0);
             } else if ev.id == show_hide_id {
                 #[cfg(windows)]
@@ -105,7 +140,7 @@ impl Tray {
                     !cur
                 };
                 #[cfg(windows)]
-                if let Some(hwnd) = find_netwatch_hwnd() {
+                if let Some(hwnd) = crate::win32::find_netwatch_hwnd() {
                     crate::click_through::set(hwnd, new_val);
                 }
                 ctx.request_repaint();
@@ -120,21 +155,6 @@ fn make_icon() -> Result<Icon> {
     Ok(Icon::from_rgba(rgba, size, size)?)
 }
 
-#[cfg(windows)]
-fn find_netwatch_hwnd() -> Option<isize> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title: Vec<u16> = "netwatch"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if hwnd.is_null() {
-        None
-    } else {
-        Some(hwnd as isize)
-    }
-}
-
 /// Flip the window between hidden and visible via direct Win32, bypassing
 /// egui's viewport command queue (which may be idle while the window is
 /// hidden). Re-applies AlwaysOnTop on show because Windows can drop the
@@ -145,7 +165,7 @@ fn toggle_window_visibility(state: &Arc<RwLock<AppState>>) {
         IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_NOTOPMOST,
         HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW,
     };
-    let Some(hwnd_isize) = find_netwatch_hwnd() else {
+    let Some(hwnd_isize) = crate::win32::find_netwatch_hwnd() else {
         return;
     };
     let hwnd = hwnd_isize as *mut core::ffi::c_void;

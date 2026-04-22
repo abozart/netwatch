@@ -8,6 +8,8 @@ mod icon;
 mod settings;
 mod state;
 mod tray;
+mod tray_render;
+mod ui;
 #[cfg(windows)]
 mod actions;
 #[cfg(windows)]
@@ -22,12 +24,31 @@ mod etw;
 mod services;
 #[cfg(windows)]
 mod tasks;
+#[cfg(windows)]
+mod win32;
 
 use eframe::egui;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
+    // Install a panic hook that tears down the ETW session before the
+    // process aborts (we build with `panic = "abort"` so drop handlers
+    // don't run). Without this, a panic in any thread would leave a live
+    // kernel-network session registered under our PID name, blocking the
+    // next run with "AlreadyExist" until the user runs `logman stop`.
+    // The default hook still runs first — we chain to it so panic output
+    // (location, message, backtrace if enabled) still hits stderr.
+    #[cfg(windows)]
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            default_hook(info);
+            etw::shutdown();
+            services::shutdown();
+        }));
+    }
+
     // Single-instance guard. If another netwatch.exe is already running,
     // surface that window (restore from tray/minimized + foreground) and bail
     // without spinning up a second UI, background threads, or tray icon.

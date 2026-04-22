@@ -54,6 +54,7 @@ pub struct AppState {
     pub always_on_top: bool,
     pub sort_by: SortBy,
     pub sort_dir: SortDir,
+    pub chart_style: crate::ui::chart::ChartStyle,
     pub etw_error: Option<String>,
     pub etw_started: bool,
     pub services: HashMap<u32, Vec<String>>,
@@ -70,6 +71,11 @@ pub struct AppState {
     pub hide_from_taskbar: bool,
     /// Feature name currently being rebound via the "Press keys…" popup.
     /// None when no recording is in progress.
+    ///
+    /// Stores `&'static str` (not `String`) because it's always one of the
+    /// `FeatureToggle::settings_key()` literals — `"click_through"`,
+    /// `"pause"`, etc. If those keys ever become dynamic/heap-allocated,
+    /// this field must change to `String` (or the lifetime becomes unsound).
     pub recording_hotkey: Option<&'static str>,
 }
 
@@ -92,6 +98,7 @@ impl AppState {
             always_on_top: defaults::ALWAYS_ON_TOP,
             sort_by: defaults::SORT_BY,
             sort_dir: defaults::SORT_DIR,
+            chart_style: defaults::CHART_STYLE,
             etw_error: None,
             etw_started: false,
             services: HashMap::new(),

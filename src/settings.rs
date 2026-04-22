@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::defaults;
 use crate::features::FeatureToggle;
 use crate::state::{AppState, SortBy, SortDir};
+use crate::ui::chart::ChartStyle;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -27,6 +28,8 @@ pub struct Settings {
     pub hide_from_taskbar: bool,
     pub sort_by: SortBy,
     pub sort_dir: SortDir,
+    #[serde(default)]
+    pub chart_style: ChartStyle,
     /// feature_key (e.g. "click_through") → combo ("Ctrl+Alt+Shift+T")
     #[serde(default)]
     pub hotkeys: HashMap<String, String>,
@@ -63,6 +66,7 @@ impl Default for Settings {
             hide_from_taskbar: defaults::HIDE_FROM_TASKBAR,
             sort_by: defaults::SORT_BY,
             sort_dir: defaults::SORT_DIR,
+            chart_style: defaults::CHART_STYLE,
             hotkeys,
             window_size: None,
             window_pos: None,
@@ -100,6 +104,7 @@ impl Settings {
         state.opacity = self.opacity;
         state.sort_by = self.sort_by;
         state.sort_dir = self.sort_dir;
+        state.chart_style = self.chart_style;
         // Apply every FeatureToggle via the single source of truth. Adding a new
         // feature to the enum means its write path here is automatic.
         for &feat in FeatureToggle::ALL {
@@ -143,6 +148,7 @@ impl Settings {
             hide_from_taskbar: FeatureToggle::HideFromTaskbar.get(state),
             sort_by: state.sort_by,
             sort_dir: state.sort_dir,
+            chart_style: state.chart_style,
             hotkeys,
             // Populated only at exit via Settings::with_window_rect so per-frame
             // comparisons in app.rs don't spam-save while the user drags/resizes.

@@ -2009,6 +2009,7 @@ dependencies = [
 name = "netwatch"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "eframe",
  "egui",

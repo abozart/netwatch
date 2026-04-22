@@ -1,6 +1,6 @@
 use anyhow::Result;
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -11,6 +11,12 @@ pub static ETW_EVENTS_SEEN: AtomicU64 = AtomicU64::new(0);
 pub static ETW_EVENTS_MATCHED: AtomicU64 = AtomicU64::new(0);
 /// Events we saw but couldn't get a schema/parser for (prod/schema mismatch).
 pub static ETW_EVENTS_PARSE_ERR: AtomicU64 = AtomicU64::new(0);
+
+/// Flipped by [`shutdown`] so the sibling tick thread spawned in [`run`]
+/// exits its polling loop instead of surviving past the ETW trace stop.
+/// Harmless today because `on_exit` calls `std::process::exit`, but without
+/// this flag the thread would leak if the force-exit path ever goes away.
+static TICK_STOP: AtomicBool = AtomicBool::new(false);
 
 use ferrisetw::parser::Parser;
 use ferrisetw::provider::Provider;
@@ -30,6 +36,7 @@ fn session_name() -> String {
 }
 
 pub fn shutdown() {
+    TICK_STOP.store(true, Ordering::Relaxed);
     if let Some(name) = CURRENT_SESSION.lock().take() {
         stop_existing_session(&name);
     }
@@ -124,7 +131,15 @@ pub fn run(state: Arc<RwLock<AppState>>) -> Result<()> {
         let mut sys = System::new();
         sys.refresh_processes(ProcessesToUpdate::All, true);
         loop {
-            std::thread::sleep(Duration::from_millis(1000));
+            // Poll the shutdown flag on a shorter cadence than the refresh
+            // so `etw::shutdown` takes effect within ~100 ms instead of
+            // waiting out a full second of sleep.
+            for _ in 0..10 {
+                if TICK_STOP.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             sys.refresh_processes(ProcessesToUpdate::All, true);
             let alive: std::collections::HashSet<u32> = sys
                 .processes()
