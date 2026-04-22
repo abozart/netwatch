@@ -2,6 +2,62 @@
 
 All notable changes to netwatch. Newest first.
 
+## 0.1.0-alpha.2 — 2026-04-22
+
+Second alpha. Internal refactor plus a new user-facing option and
+several hardening fixes surfaced by two audit passes.
+
+### Added
+- **Chart style** option (Line / Area / Bars) selectable from the
+  Options menu and persisted to `settings.json`. Line is the existing
+  thin sparkline; Area fills to the y=0 baseline; Bars interleaves up
+  and dn at each sample (width 0.45 with ±0.25 offset, ~90 % of the
+  per-sample slot).
+- Options menu now renders toggles **2 per line** with a full-width
+  fallback for an odd tail. Chart-style selector sits above the
+  toggle grid.
+- Tray icon now renders Segoe UI Bold at 9 px via `ab_glyph`
+  (read from `%WINDIR%\Fonts` at startup) — proper glyphs instead of
+  hand-tuned bitmaps. Falls back to the static ring icon if the font
+  can't be loaded.
+- Chart peak labels never overlap: Dn sits above the chart baseline,
+  Up sits below, separated by the full 22 px peak-label strip.
+
+### Changed
+- **Refactor**: every widget moved out of `src/app.rs` into
+  `src/ui/*.rs` (chart, titlebar, options_menu, table, action_menu,
+  resize_grip, hotkey_modal). `app.rs` drops from ~1240 lines to
+  ~350 lines of pure lifecycle/orchestration. Method-call sites in
+  `update()` are byte-identical — widgets attach to `NetWatchApp`
+  via split `impl` blocks.
+- `find_netwatch_hwnd` deduped into `src/win32.rs` (was copy-pasted
+  across `app.rs`, `tray.rs`, and `single_instance.rs`).
+- Tray tooltip / icon format: compact 3-char display with decimal
+  promotion — a 313 KB/s rate now shows as `.3M` instead of silently
+  capping at `99K`.
+
+### Fixed
+- Firewall rule scripts now escape embedded single quotes in the
+  exe's basename before interpolating into the PowerShell literal,
+  matching the existing treatment of service and scheduled-task
+  names. An exe whose filename contained `'` could otherwise break
+  the script.
+- ETW + services refresher threads respond to an `AtomicBool`
+  shutdown flag instead of relying on `std::process::exit` to kill
+  them. Tear-down now takes effect within ~100–250 ms.
+- `main()` installs a panic hook that calls `etw::shutdown` /
+  `services::shutdown` before `panic = "abort"` kills the process —
+  prevents an `AlreadyExist` failure-to-launch on the next run if
+  any thread panics.
+- Click-through `WS_EX_TRANSPARENT` flag is no longer written via
+  `SetWindowLongW` every frame — cached last value, only re-applied
+  on change.
+- Tray event thread logs the `recv` error to stderr before exiting
+  instead of silently dropping out of the loop.
+- Tray icon renderer returns `Option<Vec<u8>>`; the caller skips the
+  Win32 update when the font is unavailable so the static ring icon
+  stays visible instead of going blank.
+
 ## 0.1.0-alpha.1 — 2026-04-18
 
 First alpha. Everything below is functional but rough.

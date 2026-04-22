@@ -10,7 +10,7 @@ Up/Dn rate so you can glance at it without opening the window.
 
 Single-binary (~4 MB), no installer, no dependencies outside Windows.
 
-> Status: **0.1.0-alpha.1** — early and rough around the edges. Feedback
+> Status: **0.1.0-alpha.2** — early and rough around the edges. Feedback
 > and bug reports welcome.
 
 ## Requirements
